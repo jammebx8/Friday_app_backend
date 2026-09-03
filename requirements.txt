@@ -1,0 +1,31 @@
+# ── Web framework ─────────────────────────────────────────────────────────────
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-multipart==0.0.12
+
+# ── Config ────────────────────────────────────────────────────────────────────
+pydantic==2.10.3
+pydantic-settings==2.6.1
+
+# ── AI / ML ───────────────────────────────────────────────────────────────────
+groq==0.13.1
+sentence-transformers==3.3.1
+torch==2.5.1+cpu                  # CPU-only build — remove +cpu for GPU
+torchvision==0.20.1+cpu
+
+# ── LangChain semantic chunker ────────────────────────────────────────────────
+langchain==0.3.13
+langchain-community==0.3.13
+langchain-experimental==0.3.4
+langchain-huggingface==0.1.2
+
+# ── PDF rendering ─────────────────────────────────────────────────────────────
+PyMuPDF==1.25.1
+
+# ── Database / Supabase ───────────────────────────────────────────────────────
+supabase==2.10.0
+httpx==0.27.2
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+python-dotenv==1.0.1
+tenacity==9.0.0
