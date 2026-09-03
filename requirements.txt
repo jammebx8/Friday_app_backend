@@ -10,7 +10,7 @@ pydantic-settings==2.6.1
 # ── AI / ML ───────────────────────────────────────────────────────────────────
 groq==0.13.1
 sentence-transformers==3.3.1
-torch==2.5.1+cpu                  # CPU-only build — remove +cpu for GPU
+torch==2.5.1                # CPU-only build — remove +cpu for GPU
 torchvision==0.20.1+cpu
 
 # ── LangChain semantic chunker ────────────────────────────────────────────────
