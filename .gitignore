@@ -39,3 +39,12 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Python
+__pycache__/
+*.py[cod]
+.env
+/tmp/
+
+# Embed worker (deployed separately to Railway — not part of Vercel build)
+friday-embed-worker/

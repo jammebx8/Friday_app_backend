@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Friday RAG — Backend Tester</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0a0a0a;
+      color: #e5e5e5;
+      min-height: 100vh;
+      padding: 32px 16px;
+    }
+
+    h1 { font-size: 20px; font-weight: 600; margin-bottom: 4px; }
+    .subtitle { font-size: 13px; color: #666; margin-bottom: 32px; }
+
+    .card {
+      background: #111;
+      border: 1px solid #222;
+      border-radius: 14px;
+      padding: 24px;
+      margin-bottom: 20px;
+      max-width: 760px;
+    }
+
+    .card h2 {
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: #888;
+      margin-bottom: 16px;
+    }
+
+    label { font-size: 13px; color: #aaa; display: block; margin-bottom: 6px; }
+
+    input[type="text"], input[type="file"] {
+      width: 100%;
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 8px;
+      color: #e5e5e5;
+      font-size: 14px;
+      padding: 9px 12px;
+      margin-bottom: 14px;
+      outline: none;
+    }
+    input[type="text"]:focus { border-color: #444; }
+    input[type="file"] { cursor: pointer; padding: 8px 10px; }
+
+    .row { display: flex; gap: 10px; flex-wrap: wrap; }
+
+    button {
+      background: #1e1e1e;
+      border: 1px solid #333;
+      border-radius: 8px;
+      color: #e5e5e5;
+      font-size: 13px;
+      font-weight: 500;
+      padding: 9px 18px;
+      cursor: pointer;
+      transition: background .15s, border-color .15s;
+      white-space: nowrap;
+    }
+    button:hover { background: #2a2a2a; border-color: #444; }
+    button:disabled { opacity: .4; cursor: not-allowed; }
+    button.primary { background: #1d4ed8; border-color: #2563eb; color: #fff; }
+    button.primary:hover { background: #2563eb; }
+    button.danger  { background: #7f1d1d; border-color: #991b1b; color: #fca5a5; }
+
+    .progress-wrap {
+      background: #1a1a1a;
+      border-radius: 6px;
+      height: 6px;
+      margin: 10px 0 6px;
+      overflow: hidden;
+      display: none;
+    }
+    .progress-bar {
+      height: 100%;
+      background: #3b82f6;
+      border-radius: 6px;
+      transition: width .3s ease;
+      width: 0%;
+    }
+    .progress-label { font-size: 12px; color: #666; margin-bottom: 14px; }
+
+    /* Log terminal */
+    #log {
+      background: #050505;
+      border: 1px solid #1e1e1e;
+      border-radius: 10px;
+      padding: 16px;
+      font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+      font-size: 12.5px;
+      line-height: 1.7;
+      min-height: 180px;
+      max-height: 480px;
+      overflow-y: auto;
+      max-width: 760px;
+    }
+    .log-time  { color: #555; }
+    .log-info  { color: #60a5fa; }
+    .log-ok    { color: #34d399; }
+    .log-warn  { color: #fbbf24; }
+    .log-error { color: #f87171; }
+    .log-data  { color: #c084fc; }
+    .log-sep   { color: #333; }
+
+    .badge {
+      display: inline-block;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 20px;
+      font-weight: 600;
+      margin-left: 6px;
+    }
+    .badge-ok    { background: #064e3b; color: #34d399; }
+    .badge-error { background: #450a0a; color: #f87171; }
+    .badge-warn  { background: #431407; color: #fbbf24; }
+
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 500px) { .grid2 { grid-template-columns: 1fr; } }
+
+    .status-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      border: 1px solid #2a2a2a;
+      background: #161616;
+      color: #aaa;
+      margin-top: 4px;
+    }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: #555; flex-shrink: 0; }
+    .dot.green  { background: #34d399; }
+    .dot.blue   { background: #60a5fa; }
+    .dot.yellow { background: #fbbf24; animation: pulse 1s infinite; }
+    .dot.red    { background: #f87171; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  </style>
+</head>
+<body>
+
+  <h1>🧪 Friday RAG — Backend Tester</h1>
+  <p class="subtitle">Diagnose CORS, upload flow, ingestion progress, and chat — without touching the Next.js app.</p>
+
+  <!-- ── Config ──────────────────────────────────────────────────────────── -->
+  <div class="card">
+    <h2>1 · Configuration</h2>
+    <label>Backend URL (your Vercel deployment)</label>
+    <input type="text" id="backendUrl" value="https://friday-app-backend.vercel.app" />
+    <div class="row">
+      <button onclick="testHealth()">▶ Test /health</button>
+      <button onclick="testDebug()">🔍 Test /debug</button>
+      <button onclick="testCors()">🌐 Test CORS preflight</button>
+      <button onclick="clearLog()" class="danger">Clear log</button>
+    </div>
+  </div>
+
+  <!-- ── Upload ──────────────────────────────────────────────────────────── -->
+  <div class="card">
+    <h2>2 · Upload PDF via Supabase Storage → /books/process</h2>
+
+    <label>Supabase URL</label>
+    <input type="text" id="supabaseUrl" placeholder="https://xxxx.supabase.co" />
+
+    <label>Supabase Anon Key</label>
+    <input type="text" id="supabaseKey" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." />
+
+    <label>PDF File</label>
+    <input type="file" id="pdfFile" accept=".pdf,application/pdf" />
+
+    <div class="progress-wrap" id="uploadProgressWrap">
+      <div class="progress-bar" id="uploadProgressBar"></div>
+    </div>
+    <div class="progress-label" id="uploadProgressLabel"></div>
+
+    <div class="row">
+      <button class="primary" onclick="uploadAndProcess()" id="btnUpload">⬆ Upload + Process</button>
+    </div>
+
+    <div id="bookStatus" style="margin-top:14px;display:none">
+      <label>Book ID</label>
+      <input type="text" id="bookIdField" readonly />
+      <div class="row">
+        <button onclick="pollStatus()">📊 Poll status once</button>
+        <button onclick="startPolling()" id="btnPoll">🔄 Auto-poll every 3s</button>
+        <button onclick="stopPolling()" class="danger">⏹ Stop polling</button>
+      </div>
+      <div id="bookChip" class="status-chip" style="margin-top:10px">
+        <div class="dot" id="bookDot"></div>
+        <span id="bookChipText">—</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Chat ────────────────────────────────────────────────────────────── -->
+  <div class="card">
+    <h2>3 · Ask a question (/chat)</h2>
+    <label>Book ID (auto-filled after upload)</label>
+    <input type="text" id="chatBookId" placeholder="uuid" />
+    <label>Question</label>
+    <input type="text" id="chatQuestion" value="What is this book about?" />
+    <div class="row">
+      <button class="primary" onclick="sendChat()">💬 Send</button>
+    </div>
+  </div>
+
+  <!-- ── Log ─────────────────────────────────────────────────────────────── -->
+  <div id="log"><span class="log-sep">— log output will appear here —</span></div>
+
+  <script>
+    // ── State ────────────────────────────────────────────────────────────────
+    let pollInterval = null;
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    function base() { return document.getElementById('backendUrl').value.replace(/\/$/, ''); }
+
+    function now() {
+      return new Date().toLocaleTimeString('en-US', { hour12: false });
+    }
+
+    function log(msg, type = 'info') {
+      const el = document.getElementById('log');
+      const line = document.createElement('div');
+      line.innerHTML = `<span class="log-time">[${now()}]</span> <span class="log-${type}">${msg}</span>`;
+      el.appendChild(line);
+      el.scrollTop = el.scrollHeight;
+    }
+
+    function logSep(label) {
+      const el = document.getElementById('log');
+      const line = document.createElement('div');
+      line.innerHTML = `<span class="log-sep">─── ${label} ───</span>`;
+      el.appendChild(line);
+    }
+
+    function logJson(obj) {
+      const el = document.getElementById('log');
+      const pre = document.createElement('pre');
+      pre.className = 'log-data';
+      pre.style.cssText = 'margin:4px 0 8px 0; padding:8px 12px; background:#0d0d0d; border-radius:6px; overflow-x:auto; font-size:12px;';
+      pre.textContent = JSON.stringify(obj, null, 2);
+      el.appendChild(pre);
+      el.scrollTop = el.scrollHeight;
+    }
+
+    function clearLog() {
+      document.getElementById('log').innerHTML = '<span class="log-sep">— cleared —</span>';
+    }
+
+    function badge(text, type) {
+      return `<span class="badge badge-${type}">${text}</span>`;
+    }
+
+    function setBookStatus(status, progress) {
+      const dot   = document.getElementById('bookDot');
+      const chip  = document.getElementById('bookChipText');
+      const colors = { pending:'yellow', processing:'blue', completed:'green', failed:'red', uploading:'yellow' };
+      dot.className  = 'dot ' + (colors[status] || '');
+      chip.textContent = `${status}  ${progress !== undefined ? progress + '%' : ''}`;
+    }
+
+    // ── 1 · Health ───────────────────────────────────────────────────────────
+
+    async function testHealth() {
+      logSep('GET /health');
+      try {
+        const t0 = performance.now();
+        const res = await fetch(`${base()}/health`);
+        const ms  = Math.round(performance.now() - t0);
+        const body = await res.json();
+        if (res.ok) {
+          log(`/health → ${res.status} OK  (${ms}ms) ${badge('PASS','ok')}`, 'ok');
+        } else {
+          log(`/health → ${res.status} ${badge('FAIL','error')}`, 'error');
+        }
+        logJson(body);
+      } catch (e) {
+        log(`/health NETWORK ERROR: ${e.message} ${badge('FAIL','error')}`, 'error');
+        log('→ Is the backend URL correct? Is the deployment live?', 'warn');
+      }
+    }
+
+    // ── 2 · Debug ────────────────────────────────────────────────────────────
+
+    async function testDebug() {
+      logSep('GET /debug');
+      try {
+        const res  = await fetch(`${base()}/debug`);
+        const body = await res.json();
+        if (res.ok) {
+          log(`/debug → ${res.status} OK  version=${body.version} ${badge('PASS','ok')}`, 'ok');
+          const hasProcess = (body.endpoints || []).some(r => r.path?.includes('/books/process'));
+          const hasUpload  = (body.endpoints || []).some(r => r.path?.includes('/books/upload'));
+          if (hasProcess) log('✓ /books/process endpoint found (new code deployed)', 'ok');
+          if (hasUpload)  log('✗ /books/upload still present — old code is deployed!', 'error');
+          if (!hasProcess && !hasUpload) log('Could not find /books/* routes — check deployment', 'warn');
+        } else {
+          log(`/debug → ${res.status} — endpoint may not exist yet (old deployment)`, 'warn');
+          log('Deploy the latest code first, then run this test again.', 'warn');
+        }
+        logJson(body);
+      } catch (e) {
+        log(`/debug NETWORK ERROR: ${e.message}`, 'error');
+      }
+    }
+
+    // ── 3 · CORS preflight ───────────────────────────────────────────────────
+
+    async function testCors() {
+      logSep('OPTIONS /books/process (CORS preflight)');
+      try {
+        const res = await fetch(`${base()}/books/process`, {
+          method: 'OPTIONS',
+          headers: {
+            'Origin': 'https://friday-ai-topaz-ten.vercel.app',
+            'Access-Control-Request-Method': 'POST',
+            'Access-Control-Request-Headers': 'content-type',
+          }
+        });
+        const acao = res.headers.get('access-control-allow-origin');
+        const acam = res.headers.get('access-control-allow-methods');
+        log(`Preflight status: ${res.status}`, res.status < 400 ? 'ok' : 'error');
+        if (acao) {
+          log(`Access-Control-Allow-Origin: ${acao} ${badge('PASS','ok')}`, 'ok');
+        } else {
+          log(`No Access-Control-Allow-Origin header! ${badge('CORS BLOCKED','error')}`, 'error');
+          log('→ vercel.json headers block is missing or not deployed.', 'warn');
+        }
+        if (acam) log(`Access-Control-Allow-Methods: ${acam}`, 'info');
+
+        // Log all headers for full picture
+        const headers = {};
+        res.headers.forEach((v, k) => { headers[k] = v; });
+        logJson(headers);
+      } catch (e) {
+        log(`OPTIONS request failed: ${e.message}`, 'error');
+        log('This can happen if the server returns no CORS headers on errors.', 'warn');
+      }
+    }
+
+    // ── 4 · Upload + Process ─────────────────────────────────────────────────
+
+    async function uploadAndProcess() {
+      const supabaseUrl = document.getElementById('supabaseUrl').value.trim();
+      const supabaseKey = document.getElementById('supabaseKey').value.trim();
+      const fileInput   = document.getElementById('pdfFile');
+      const file        = fileInput.files[0];
+
+      if (!supabaseUrl) { log('Enter Supabase URL first.', 'warn'); return; }
+      if (!supabaseKey) { log('Enter Supabase anon key first.', 'warn'); return; }
+      if (!file)        { log('Select a PDF file first.', 'warn'); return; }
+
+      document.getElementById('btnUpload').disabled = true;
+      logSep('Upload PDF to Supabase Storage');
+
+      const storagePath = `${crypto.randomUUID()}-${file.name}`;
+      const uploadUrl   = `${supabaseUrl}/storage/v1/object/books/${storagePath}`;
+
+      log(`File: ${file.name}  (${(file.size / 1024).toFixed(1)} KB)`, 'info');
+      log(`Storage path: ${storagePath}`, 'info');
+      log(`Upload URL: ${uploadUrl}`, 'info');
+
+      // Show progress bar
+      const wrap  = document.getElementById('uploadProgressWrap');
+      const bar   = document.getElementById('uploadProgressBar');
+      const label = document.getElementById('uploadProgressLabel');
+      wrap.style.display = 'block';
+
+      try {
+        // ── Step 1: XHR upload with progress ──────────────────────────────
+        await new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+
+          xhr.upload.addEventListener('progress', (e) => {
+            if (e.lengthComputable) {
+              const pct = Math.round(e.loaded / e.total * 100);
+              bar.style.width  = pct + '%';
+              label.textContent = `Uploading to Supabase Storage… ${pct}%`;
+            }
+          });
+
+          xhr.addEventListener('load', () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              log(`Storage upload → ${xhr.status} ${badge('OK','ok')}`, 'ok');
+              try { logJson(JSON.parse(xhr.responseText)); } catch {}
+              resolve();
+            } else {
+              log(`Storage upload failed → ${xhr.status}: ${xhr.responseText}`, 'error');
+
+              // Helpful hints for common errors
+              if (xhr.status === 400) log('→ Bucket "books" may not exist in Supabase Storage.', 'warn');
+              if (xhr.status === 403) log('→ RLS policy is blocking the upload. Add an INSERT policy for the "books" bucket.', 'warn');
+              if (xhr.status === 0)   log('→ Network error or CORS blocked the storage request.', 'warn');
+              reject(new Error(`Storage ${xhr.status}`));
+            }
+          });
+
+          xhr.addEventListener('error', () => {
+            log('Storage XHR network error — check Supabase URL and bucket name.', 'error');
+            reject(new Error('Network error'));
+          });
+
+          xhr.open('POST', uploadUrl);
+          xhr.setRequestHeader('Authorization', `Bearer ${supabaseKey}`);
+          xhr.setRequestHeader('Content-Type', 'application/pdf');
+          xhr.setRequestHeader('x-upsert', 'true');
+          xhr.send(file);
+        });
+
+        bar.style.width   = '100%';
+        bar.style.background = '#34d399';
+        label.textContent = 'Storage upload complete ✓';
+
+        // ── Step 2: Notify backend ─────────────────────────────────────────
+        logSep('POST /books/process');
+        const title   = file.name.replace(/\.pdf$/i, '');
+        const payload = { storage_path: storagePath, title, subject: '', filename: file.name };
+        log(`Sending: ${JSON.stringify(payload)}`, 'info');
+
+        const t0  = performance.now();
+        const res = await fetch(`${base()}/books/process`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify(payload),
+        });
+        const ms   = Math.round(performance.now() - t0);
+        const body = await res.json().catch(() => null);
+
+        if (res.ok) {
+          log(`/books/process → ${res.status} (${ms}ms) ${badge('PASS','ok')}`, 'ok');
+          logJson(body);
+
+          // Store book_id for polling + chat
+          const bookId = body?.book_id;
+          document.getElementById('bookIdField').value  = bookId || '';
+          document.getElementById('chatBookId').value   = bookId || '';
+          document.getElementById('bookStatus').style.display = 'block';
+          setBookStatus('pending', 0);
+          startPolling();
+        } else {
+          log(`/books/process → ${res.status} ${badge('FAIL','error')}`, 'error');
+          if (body) logJson(body);
+
+          if (res.status === 404) log('→ /books/process route not found. Old code is still deployed.', 'warn');
+          if (res.status === 422) log('→ Request validation failed. Check the payload format.', 'warn');
+          if (res.status === 500) log('→ Backend DB error — check Supabase credentials in Vercel env vars.', 'warn');
+
+          // Check CORS headers on error response
+          const acao = res.headers.get('access-control-allow-origin');
+          if (!acao) log('→ No CORS header on error response — browser will report this as a CORS error.', 'warn');
+        }
+
+      } catch (e) {
+        log(`Upload flow error: ${e.message}`, 'error');
+      } finally {
+        document.getElementById('btnUpload').disabled = false;
+      }
+    }
+
+    // ── 5 · Poll status ──────────────────────────────────────────────────────
+
+    async function pollStatus() {
+      const bookId = document.getElementById('bookIdField').value.trim();
+      if (!bookId) { log('No book ID — upload a PDF first.', 'warn'); return; }
+
+      try {
+        const res  = await fetch(`${base()}/books/${bookId}`);
+        const body = await res.json().catch(() => null);
+        if (res.ok) {
+          const s = body.status;
+          const p = body.progress;
+          log(`/books/${bookId} → status=${s}  progress=${p}%  pages=${body.pages_done}/${body.total_pages}`, s === 'failed' ? 'error' : s === 'completed' ? 'ok' : 'info');
+          setBookStatus(s, p);
+          if (body.error_msg) log(`Error: ${body.error_msg}`, 'error');
+          if (s === 'completed') {
+            log(`Ingestion complete! You can now test /chat.`, 'ok');
+            stopPolling();
+          }
+          if (s === 'failed') stopPolling();
+        } else {
+          log(`/books/${bookId} → ${res.status}`, 'error');
+          if (body) logJson(body);
+        }
+      } catch (e) {
+        log(`Poll error: ${e.message}`, 'error');
+      }
+    }
+
+    function startPolling() {
+      stopPolling();
+      log('Auto-polling every 3s…', 'info');
+      pollInterval = setInterval(pollStatus, 3000);
+      pollStatus(); // immediate
+    }
+
+    function stopPolling() {
+      if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+        log('Polling stopped.', 'info');
+      }
+    }
+
+    // ── 6 · Chat ─────────────────────────────────────────────────────────────
+
+    async function sendChat() {
+      const bookId   = document.getElementById('chatBookId').value.trim();
+      const question = document.getElementById('chatQuestion').value.trim();
+      if (!bookId)   { log('Enter a book ID.', 'warn'); return; }
+      if (!question) { log('Enter a question.', 'warn'); return; }
+
+      logSep('POST /chat');
+      log(`book_id=${bookId}`, 'info');
+      log(`question=${question}`, 'info');
+
+      try {
+        const t0  = performance.now();
+        const res = await fetch(`${base()}/chat`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ book_id: bookId, question }),
+        });
+        const ms   = Math.round(performance.now() - t0);
+        const body = await res.json().catch(() => null);
+
+        if (res.ok) {
+          log(`/chat → ${res.status} (${ms}ms) ${badge('PASS','ok')}`, 'ok');
+          log(`Answer: ${body?.answer?.slice(0, 200)}…`, 'ok');
+          log(`Citations: pages ${JSON.stringify(body?.citations)}`, 'info');
+          logJson(body);
+        } else {
+          log(`/chat → ${res.status} ${badge('FAIL','error')}`, 'error');
+          if (body) logJson(body);
+          if (res.status === 409) log('→ Book is still processing. Wait for status=completed.', 'warn');
+        }
+      } catch (e) {
+        log(`Chat error: ${e.message}`, 'error');
+      }
+    }
+  </script>
+</body>
+</html>

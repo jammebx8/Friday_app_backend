@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
 
 from app.api.ingest import run_ingestion
 from app.db.supabase import db_insert, db_select
@@ -27,8 +27,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/books", tags=["books"])
 
-# Supabase Storage bucket that the frontend uploads PDFs into.
-# Create this bucket in your Supabase dashboard (Storage → New bucket).
 STORAGE_BUCKET = "books"
 
 
@@ -43,18 +41,19 @@ STORAGE_BUCKET = "books"
 async def process_book(
     body: ProcessBookRequest,
     background_tasks: BackgroundTasks,
+    request: Request,
 ) -> BookUploadResponse:
     """
     Accepts a small JSON payload (storage path + title), creates the book
     record, and kicks off background ingestion.
-
-    The frontend:
-      1. Uploads the PDF directly to Supabase Storage (client-side).
-      2. Calls this endpoint with the resulting storage path.
-
-    This approach avoids sending the binary file through Vercel's edge network
-    and stays well under the 4.5 MB request-body limit.
     """
+    logger.info(
+        "POST /books/process  origin=%s  storage_path=%s  title=%s",
+        request.headers.get("origin", "-"),
+        body.storage_path,
+        body.title,
+    )
+
     storage_path = body.storage_path.strip()
     if not storage_path:
         raise HTTPException(
@@ -65,7 +64,6 @@ async def process_book(
     filename = body.filename.strip() or storage_path.split("/")[-1]
     title = body.title.strip() or filename
 
-    # ── Create books row ──────────────────────────────────────────────────────
     try:
         row = await db_insert(
             "books",
@@ -80,19 +78,15 @@ async def process_book(
             },
         )
     except Exception as exc:
-        logger.exception("Failed to create book record for path=%s", storage_path)
+        logger.exception("DB insert failed for storage_path=%s", storage_path)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Database error: {exc}",
         ) from exc
 
     book_id: UUID = row["id"]
-    logger.info(
-        "Book record created: id=%s title=%s storage_path=%s",
-        book_id, title, storage_path,
-    )
+    logger.info("Book record created  id=%s  title=%s  path=%s", book_id, title, storage_path)
 
-    # ── Enqueue background ingestion ──────────────────────────────────────────
     background_tasks.add_task(
         run_ingestion,
         book_id=book_id,
@@ -116,13 +110,13 @@ async def process_book(
     response_model=BookStatusResponse,
     summary="Get book metadata and ingestion progress",
 )
-async def get_book(book_id: UUID) -> BookStatusResponse:
-    """
-    Return the book's metadata and current ingestion progress (0–100 %).
-
-    The frontend polls this endpoint every few seconds to update the circular
-    progress indicator shown above the prompt bar.
-    """
+async def get_book(book_id: UUID, request: Request) -> BookStatusResponse:
+    """Return the book's metadata and current ingestion progress (0–100 %)."""
+    logger.info(
+        "GET /books/%s  origin=%s",
+        book_id,
+        request.headers.get("origin", "-"),
+    )
     rows = await db_select("books", filters={"id": str(book_id)}, limit=1)
     if not rows:
         raise HTTPException(
