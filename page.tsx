@@ -17,7 +17,7 @@ import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import Sidebar from '../../app/components/ai/Sidebar';
 
 // ─── RAG BACKEND ──────────────────────────────────────────────────────────────
-const RAG_BASE = process.env.NEXT_PUBLIC_RAG_API_URL || 'http://localhost:8000';
+const RAG_BASE = 'https://friday-app-backend.vercel.app';
 
 // ─── TYPES ───────────────────────────────────────────────────────────────────
 
@@ -45,8 +45,9 @@ interface UploadedBook {
   bookId: string;
   title: string;
   filename: string;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
-  progress: number;        // 0–100
+  status: 'uploading' | 'pending' | 'processing' | 'completed' | 'failed';
+  progress: number;        // 0–100 (upload 0-100, then ingestion 0-100)
+  uploadProgress: number;  // raw Supabase upload progress 0-100
   totalPages: number;
   pagesDone: number;
   errorMsg?: string;
@@ -349,51 +350,66 @@ const BookPill = ({
   book: UploadedBook;
   onRemove: () => void;
 }) => {
+  const isUploading = book.status === 'uploading';
   const isProcessing = book.status === 'processing' || book.status === 'pending';
   const isFailed = book.status === 'failed';
   const isDone = book.status === 'completed';
+
+  // During storage upload show upload%, then during ingestion show ingestion%
+  const displayProgress = isUploading ? book.uploadProgress : book.progress;
+
+  const label = isUploading
+    ? `Uploading ${book.uploadProgress}%`
+    : isProcessing
+    ? `Indexing ${book.progress}%`
+    : isDone
+    ? 'Ready'
+    : 'Failed';
 
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.9, y: 4 }}
       animate={{ opacity: 1, scale: 1, y: 0 }}
       exit={{ opacity: 0, scale: 0.85, y: 4 }}
-      className={`flex items-center gap-2 pl-2.5 pr-2 py-1.5 rounded-2xl border text-xs font-medium max-w-[220px] ${
+      className={`flex items-center gap-2 pl-2.5 pr-2 py-1.5 rounded-2xl border text-xs font-medium max-w-[240px] ${
         isDone
           ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-300'
           : isFailed
           ? 'bg-red-500/10 border-red-500/25 text-red-300'
+          : isUploading
+          ? 'bg-violet-500/10 border-violet-500/25 text-violet-300'
           : 'bg-blue-500/10 border-blue-500/25 text-blue-300'
       }`}
     >
       {/* Icon / progress ring */}
       <div className="flex-shrink-0 relative w-[22px] h-[22px] flex items-center justify-center">
-        {isProcessing ? (
-          <CircularProgress progress={book.progress} size={22} stroke={2.5} color={isDone ? '#34d399' : '#60a5fa'} />
+        {(isUploading || isProcessing) ? (
+          <CircularProgress
+            progress={displayProgress}
+            size={22}
+            stroke={2.5}
+            color={isUploading ? '#a78bfa' : '#60a5fa'}
+          />
         ) : isDone ? (
           <span className="text-emerald-400"><CheckIcon /></span>
         ) : (
           <span className="text-red-400">✕</span>
         )}
-        {/* Percentage label on top of ring while processing */}
-        {isProcessing && (
-          <span className="absolute inset-0 flex items-center justify-center text-[7px] font-bold text-blue-300">
-            {book.progress}
+        {/* Percentage label overlaid on ring */}
+        {(isUploading || isProcessing) && (
+          <span className="absolute inset-0 flex items-center justify-center text-[7px] font-bold">
+            {displayProgress}
           </span>
         )}
       </div>
 
       {/* Filename */}
-      <span className="truncate max-w-[130px]" title={book.title}>
+      <span className="truncate max-w-[120px]" title={book.title}>
         {book.title || book.filename}
       </span>
 
       {/* Status label */}
-      {isProcessing && (
-        <span className="text-[10px] text-blue-400/70 flex-shrink-0">
-          {book.progress}%
-        </span>
-      )}
+      <span className="text-[10px] opacity-60 flex-shrink-0">{label}</span>
 
       {/* Remove / detach button */}
       <button
@@ -633,6 +649,11 @@ export default function AIChat() {
   }, []);
 
   // ─── PDF UPLOAD ──────────────────────────────────────────────────────────
+  // Architecture: upload directly to Supabase Storage (no size limit, real
+  // progress), then notify the backend with just the storage path (tiny JSON
+  // body — no CORS/413 issues with Vercel).
+
+  const STORAGE_BUCKET = 'books';
 
   const handleFileSelect = useCallback(async (file: File) => {
     if (!file.name.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf') {
@@ -643,44 +664,120 @@ export default function AIChat() {
     setIsUploading(true);
     setError(null);
 
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('title', file.name.replace(/\.pdf$/i, ''));
-      formData.append('subject', '');
+    const title = file.name.replace(/\.pdf$/i, '');
+    // Unique storage path to avoid collisions
+    const storagePath = `${crypto.randomUUID()}-${file.name}`;
 
-      const res = await fetch(`${RAG_BASE}/books/upload`, {
+    // Optimistic UI — show the pill immediately in "uploading" state
+    setUploadedBook({
+      bookId: '',
+      title,
+      filename: file.name,
+      status: 'uploading',
+      progress: 0,
+      uploadProgress: 0,
+      totalPages: 0,
+      pagesDone: 0,
+    });
+
+    try {
+      // ── Step 1: Upload PDF to Supabase Storage ──────────────────────────
+      // The JS SDK doesn't expose upload progress natively, so we use
+      // XMLHttpRequest for a real progress bar, then fall back to the SDK
+      // to get the final path confirmation.
+      await new Promise<void>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+
+        xhr.upload.addEventListener('progress', (e) => {
+          if (e.lengthComputable) {
+            const pct = Math.round((e.loaded / e.total) * 100);
+            setUploadedBook(prev => prev ? { ...prev, uploadProgress: pct, progress: pct } : prev);
+          }
+        });
+
+        xhr.addEventListener('load', () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve();
+          } else {
+            reject(new Error(`Storage upload failed: ${xhr.status} ${xhr.statusText}`));
+          }
+        });
+
+        xhr.addEventListener('error', () => reject(new Error('Storage upload network error')));
+        xhr.addEventListener('abort', () => reject(new Error('Storage upload aborted')));
+
+        // Supabase Storage REST upload URL
+        const { supabaseUrl, supabaseKey } = (supabase as any).storageUrl
+          ? { supabaseUrl: '', supabaseKey: '' }
+          : (() => {
+              // Extract from the supabase client internals
+              const url: string = (supabase as any).supabaseUrl || '';
+              const key: string = (supabase as any).supabaseKey || '';
+              return { supabaseUrl: url, supabaseKey: key };
+            })();
+
+        if (supabaseUrl && supabaseKey) {
+          // Direct REST upload with XHR for progress
+          const uploadUrl = `${supabaseUrl}/storage/v1/object/${STORAGE_BUCKET}/${storagePath}`;
+          xhr.open('POST', uploadUrl);
+          xhr.setRequestHeader('Authorization', `Bearer ${supabaseKey}`);
+          xhr.setRequestHeader('Content-Type', 'application/pdf');
+          xhr.setRequestHeader('x-upsert', 'true');
+          xhr.send(file);
+        } else {
+          // Fallback: use the Supabase SDK (no progress, but works universally)
+          xhr.abort();
+          supabase.storage
+            .from(STORAGE_BUCKET)
+            .upload(storagePath, file, { upsert: true, contentType: 'application/pdf' })
+            .then(({ error }) => {
+              if (error) reject(new Error(error.message));
+              else resolve();
+            });
+        }
+      });
+
+      setUploadedBook(prev => prev ? { ...prev, uploadProgress: 100, progress: 0, status: 'pending' } : prev);
+
+      // ── Step 2: Notify backend with storage path (small JSON, no CORS/413) ─
+      const res = await fetch(`${RAG_BASE}/books/process`, {
         method: 'POST',
-        body: formData,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          storage_path: storagePath,
+          title,
+          subject: '',
+          filename: file.name,
+        }),
       });
 
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: 'Upload failed' }));
-        throw new Error(err.detail || `Upload error ${res.status}`);
+        const err = await res.json().catch(() => ({ detail: 'Processing request failed' }));
+        throw new Error(err.detail || `Backend error ${res.status}`);
       }
 
       const data = await res.json();
-      const book: UploadedBook = {
+
+      setUploadedBook(prev => prev ? {
+        ...prev,
         bookId: data.book_id,
-        title: file.name.replace(/\.pdf$/i, ''),
-        filename: file.name,
         status: data.status,
         progress: 0,
-        totalPages: 0,
-        pagesDone: 0,
-      };
+      } : prev);
 
-      setUploadedBook(book);
       startProgressPolling(data.book_id);
+
     } catch (exc: any) {
+      console.error('Upload error:', exc);
       setError(exc.message || 'Failed to upload PDF.');
+      setUploadedBook(null);
     } finally {
       setIsUploading(false);
     }
   }, [startProgressPolling]);
 
   const handlePlusClick = useCallback(() => {
-    // If a book is already loaded / processing, detach it first
+    // If a book is already attached, detach it before opening the picker
     if (uploadedBook) {
       if (progressPollRef.current) clearInterval(progressPollRef.current);
       progressPollRef.current = null;
@@ -1070,11 +1167,13 @@ export default function AIChat() {
 
   const renderComposer = () => {
     const bookReady = uploadedBook?.status === 'completed';
-    const bookProcessing = uploadedBook?.status === 'processing' || uploadedBook?.status === 'pending';
+    const bookProcessing = uploadedBook?.status === 'processing' || uploadedBook?.status === 'pending' || uploadedBook?.status === 'uploading';
     const placeholder = isRecording ? 'Recording… tap to stop'
       : isTranscribing ? 'Transcribing…'
       : bookReady ? `Ask anything about "${uploadedBook!.title}"…`
-      : bookProcessing ? `Indexing "${uploadedBook!.title}" (${uploadedBook!.progress}%)… you can still chat`
+      : bookProcessing ? uploadedBook?.status === 'uploading'
+        ? `Uploading "${uploadedBook!.title}" (${uploadedBook!.uploadProgress}%)…`
+        : `Indexing "${uploadedBook!.title}" (${uploadedBook!.progress}%)… you can still chat`
       : 'How can I help you today?';
 
     return (

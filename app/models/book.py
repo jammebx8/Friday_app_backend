@@ -30,6 +30,27 @@ class BookRecord(BaseModel):
 
 # ── API request / response schemas ────────────────────────────────────────────
 
+class ProcessBookRequest(BaseModel):
+    """
+    Body for POST /books/process.
+
+    The frontend uploads the PDF directly to Supabase Storage and then calls
+    this endpoint with the storage path so the backend can download + ingest
+    without a large HTTP body crossing Vercel's 4.5 MB limit.
+    """
+
+    storage_path: str = Field(
+        ...,
+        description=(
+            "Supabase Storage path where the PDF was uploaded, "
+            "e.g. 'books/my-textbook-uuid.pdf'."
+        ),
+    )
+    title: str = Field(..., min_length=1, max_length=512, description="Human-readable book title")
+    subject: str = Field(default="", max_length=256, description="Subject / topic label")
+    filename: str = Field(default="", max_length=512, description="Original filename")
+
+
 class BookUploadResponse(BaseModel):
     """Returned immediately after a PDF is accepted for ingestion."""
 

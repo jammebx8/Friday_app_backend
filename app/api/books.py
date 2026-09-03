@@ -1,77 +1,77 @@
 """
-Books router — PDF upload + status endpoints.
+Books router.
 
-POST /books/upload  — accept a PDF, create a books row, kick off background ingestion
-GET  /books/{id}    — return book metadata + progress
+POST /books/process  — tell the backend to ingest a PDF already in Supabase Storage
+GET  /books/{id}     — return book metadata + ingestion progress
+
+Architecture note
+-----------------
+The frontend uploads PDFs directly to Supabase Storage (bypassing Vercel's
+4.5 MB body limit entirely).  Once the upload completes the frontend calls
+POST /books/process with a small JSON body containing only the storage path.
+The backend downloads the PDF from Storage server-side and runs the full
+OCR → chunking → embedding → pgvector pipeline in a BackgroundTask.
 """
 from __future__ import annotations
 
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 
 from app.api.ingest import run_ingestion
 from app.db.supabase import db_insert, db_select
-from app.models.book import BookStatusResponse, BookUploadResponse
+from app.models.book import BookStatusResponse, BookUploadResponse, ProcessBookRequest
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/books", tags=["books"])
 
-_MAX_PDF_BYTES = 100 * 1024 * 1024  # 100 MB hard limit
+# Supabase Storage bucket that the frontend uploads PDFs into.
+# Create this bucket in your Supabase dashboard (Storage → New bucket).
+STORAGE_BUCKET = "books"
 
 
-# ── POST /books/upload ────────────────────────────────────────────────────────
+# ── POST /books/process ───────────────────────────────────────────────────────
 
 @router.post(
-    "/upload",
+    "/process",
     response_model=BookUploadResponse,
     status_code=status.HTTP_202_ACCEPTED,
-    summary="Upload a PDF textbook and start ingestion",
+    summary="Ingest a PDF that has already been uploaded to Supabase Storage",
 )
-async def upload_book(
+async def process_book(
+    body: ProcessBookRequest,
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(..., description="PDF file to ingest"),
-    title: str = Form(..., description="Human-readable book title"),
-    subject: str = Form(default="", description="Subject / topic label"),
 ) -> BookUploadResponse:
     """
-    Accept a PDF upload, create the book record, and enqueue background ingestion.
+    Accepts a small JSON payload (storage path + title), creates the book
+    record, and kicks off background ingestion.
 
-    Returns immediately with ``book_id`` and ``status: pending`` so the frontend
-    can start polling progress while ingestion runs asynchronously.
+    The frontend:
+      1. Uploads the PDF directly to Supabase Storage (client-side).
+      2. Calls this endpoint with the resulting storage path.
+
+    This approach avoids sending the binary file through Vercel's edge network
+    and stays well under the 4.5 MB request-body limit.
     """
-    # ── Validate file type ────────────────────────────────────────────────────
-    content_type = file.content_type or ""
-    filename = file.filename or "upload.pdf"
-
-    if "pdf" not in content_type.lower() and not filename.lower().endswith(".pdf"):
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail="Only PDF files are supported.",
-        )
-
-    # ── Read + size-check ─────────────────────────────────────────────────────
-    pdf_bytes = await file.read()
-    if len(pdf_bytes) == 0:
+    storage_path = body.storage_path.strip()
+    if not storage_path:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Uploaded file is empty.",
+            detail="storage_path must not be empty.",
         )
-    if len(pdf_bytes) > _MAX_PDF_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"PDF exceeds maximum allowed size of {_MAX_PDF_BYTES // 1024 // 1024} MB.",
-        )
+
+    filename = body.filename.strip() or storage_path.split("/")[-1]
+    title = body.title.strip() or filename
 
     # ── Create books row ──────────────────────────────────────────────────────
     try:
         row = await db_insert(
             "books",
             {
-                "title": title.strip() or filename,
-                "subject": subject.strip(),
+                "title": title,
+                "subject": body.subject.strip(),
                 "filename": filename,
                 "status": "pending",
                 "progress": 0,
@@ -80,22 +80,26 @@ async def upload_book(
             },
         )
     except Exception as exc:
-        logger.exception("Failed to create book record")
+        logger.exception("Failed to create book record for path=%s", storage_path)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Database error: {exc}",
         ) from exc
 
     book_id: UUID = row["id"]
-    logger.info("Book record created: id=%s title=%s", book_id, title)
+    logger.info(
+        "Book record created: id=%s title=%s storage_path=%s",
+        book_id, title, storage_path,
+    )
 
     # ── Enqueue background ingestion ──────────────────────────────────────────
     background_tasks.add_task(
         run_ingestion,
         book_id=book_id,
-        pdf_bytes=pdf_bytes,
-        title=title.strip(),
-        subject=subject.strip(),
+        storage_path=storage_path,
+        storage_bucket=STORAGE_BUCKET,
+        title=title,
+        subject=body.subject.strip(),
     )
 
     return BookUploadResponse(
@@ -125,5 +129,4 @@ async def get_book(book_id: UUID) -> BookStatusResponse:
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Book {book_id} not found.",
         )
-    row = rows[0]
-    return BookStatusResponse(**row)
+    return BookStatusResponse(**rows[0])

@@ -112,3 +112,33 @@ async def db_rpc(fn_name: str, params: dict[str, Any]) -> Any:
     client = get_client()
     response = await client.rpc(fn_name, params).execute()
     return response.data
+
+
+async def storage_download(bucket: str, path: str) -> bytes:
+    """
+    Download a file from Supabase Storage and return its raw bytes.
+
+    Args:
+        bucket: Storage bucket name, e.g. ``"books"``.
+        path:   Object path inside the bucket, e.g. ``"my-textbook.pdf"``.
+
+    Returns:
+        Raw file bytes.
+
+    Raises:
+        RuntimeError: If the download fails or the file does not exist.
+    """
+    client = get_client()
+    try:
+        response = await client.storage.from_(bucket).download(path)
+        # The SDK returns bytes directly
+        if isinstance(response, (bytes, bytearray)):
+            return bytes(response)
+        # Some SDK versions return a response object
+        if hasattr(response, "content"):
+            return response.content
+        raise RuntimeError(f"Unexpected storage response type: {type(response)}")
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to download '{path}' from bucket '{bucket}': {exc}"
+        ) from exc
