@@ -1,8 +1,9 @@
 """
-OCR service — converts rendered page images to structured Markdown.
+OCR service — converts in-memory page PNG bytes to structured Markdown.
 
 Uses the Groq Vision API (Qwen vision model) to process up to 5 pages per
-request. Implements exponential back-off retry logic for transient failures.
+request.  All image data stays in RAM — no files are written to disk.
+Implements exponential back-off retry logic for transient API failures.
 """
 from __future__ import annotations
 
@@ -14,12 +15,10 @@ from dataclasses import dataclass
 
 from app.core.config import get_settings
 from app.services.groq import vision_completion
-from app.utils.image import build_image_batch_content
+from app.utils.image import build_image_batch_content_from_bytes
 from app.utils.markdown import clean_ocr_markdown
 
 logger = logging.getLogger(__name__)
-
-# ── OCR system prompt ─────────────────────────────────────────────────────────
 
 _OCR_SYSTEM_PROMPT = """
 You are an expert OCR engine for scanned educational textbooks.
@@ -52,41 +51,27 @@ Return ONLY valid JSON — no preamble, no explanation.
 """.strip()
 
 
-# ── Data class ────────────────────────────────────────────────────────────────
-
 @dataclass
 class PageOCRResult:
     """OCR result for a single page."""
-
     page: int
     markdown: str
 
 
-# ── Internal helpers ──────────────────────────────────────────────────────────
-
 def _parse_ocr_response(raw: str, batch_start_page: int, batch_size: int) -> list[PageOCRResult]:
-    """
-    Parse the JSON array returned by the vision model.
-
-    Falls back gracefully if the model wraps the JSON in markdown fences or
-    prefixes it with text.
-    """
-    # Strip markdown code fences if present
     cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip(), flags=re.MULTILINE).strip()
-
     try:
         data = json.loads(cleaned)
     except json.JSONDecodeError:
-        # Attempt to extract a JSON array from inside the string
         match = re.search(r"\[.*\]", cleaned, re.DOTALL)
         if match:
-            data = json.loads(match.group(0))
+            try:
+                data = json.loads(match.group(0))
+            except json.JSONDecodeError:
+                data = []
         else:
-            logger.warning("Could not parse OCR JSON; treating entire batch as empty")
-            return [
-                PageOCRResult(page=batch_start_page + i, markdown="")
-                for i in range(batch_size)
-            ]
+            logger.warning("Could not parse OCR JSON; treating batch as empty")
+            return [PageOCRResult(page=batch_start_page + i, markdown="") for i in range(batch_size)]
 
     if not isinstance(data, list):
         data = [data]
@@ -96,36 +81,23 @@ def _parse_ocr_response(raw: str, batch_start_page: int, batch_size: int) -> lis
         page_num = item.get("page", batch_start_page + i)
         md = clean_ocr_markdown(item.get("markdown", ""))
         results.append(PageOCRResult(page=page_num, markdown=md))
-
     return results
 
 
 async def _ocr_batch_with_retry(
-    image_paths: list[str],
+    page_images: list[bytes],       # PNG bytes, one per page
     batch_start_page: int,
     max_retries: int,
     base_delay: float,
 ) -> list[PageOCRResult]:
-    """
-    Run OCR on a batch of images with exponential back-off retries.
-
-    Args:
-        image_paths:       Paths to PNG files in this batch (max 5).
-        batch_start_page:  1-based page number of the first image in the batch.
-        max_retries:       Total attempts before giving up.
-        base_delay:        Seconds to wait before first retry; doubles each time.
-
-    Returns:
-        List of PageOCRResult, one per image.
-    """
     settings = get_settings()
     user_instruction = (
-        f"These are pages {batch_start_page} to {batch_start_page + len(image_paths) - 1} "
+        f"These are pages {batch_start_page} to "
+        f"{batch_start_page + len(page_images) - 1} "
         "of a scanned educational textbook. Extract their text as instructed."
     )
-    content_items = build_image_batch_content(image_paths, leading_text=user_instruction)
+    content_items = build_image_batch_content_from_bytes(page_images, leading_text=user_instruction)
 
-    last_exc: Exception | None = None
     for attempt in range(1, max_retries + 1):
         try:
             raw = await vision_completion(
@@ -135,84 +107,69 @@ async def _ocr_batch_with_retry(
                 temperature=0.05,
                 max_tokens=8192,
             )
-            return _parse_ocr_response(raw, batch_start_page, len(image_paths))
+            return _parse_ocr_response(raw, batch_start_page, len(page_images))
         except Exception as exc:
-            last_exc = exc
             if attempt < max_retries:
                 delay = base_delay * (2 ** (attempt - 1))
                 logger.warning(
-                    "OCR batch (pages %d-%d) attempt %d/%d failed: %s — retrying in %.1fs",
-                    batch_start_page,
-                    batch_start_page + len(image_paths) - 1,
-                    attempt,
-                    max_retries,
-                    exc,
-                    delay,
+                    "OCR batch pages %d-%d attempt %d/%d failed: %s — retry in %.1fs",
+                    batch_start_page, batch_start_page + len(page_images) - 1,
+                    attempt, max_retries, exc, delay,
                 )
                 await asyncio.sleep(delay)
             else:
                 logger.error(
-                    "OCR batch (pages %d-%d) failed after %d attempts: %s",
-                    batch_start_page,
-                    batch_start_page + len(image_paths) - 1,
-                    max_retries,
-                    exc,
+                    "OCR batch pages %d-%d failed after %d attempts: %s",
+                    batch_start_page, batch_start_page + len(page_images) - 1,
+                    max_retries, exc,
                 )
 
-    # Return empty markdown for all pages in this batch rather than crashing
-    return [
-        PageOCRResult(page=batch_start_page + i, markdown="")
-        for i in range(len(image_paths))
-    ]
+    return [PageOCRResult(page=batch_start_page + i, markdown="") for i in range(len(page_images))]
 
-
-# ── Public API ────────────────────────────────────────────────────────────────
 
 async def ocr_pages(
-    image_paths: list[str],
+    page_images: list[bytes],         # PNG bytes list — no file paths
     batch_size: int | None = None,
     max_retries: int | None = None,
     base_delay: float | None = None,
 ) -> list[PageOCRResult]:
     """
-    OCR all page images, batching up to *batch_size* images per API call.
-
-    Processing is sequential across batches to respect rate limits; within a
-    batch all images are sent in one vision request.
+    OCR all pages from in-memory PNG bytes, batching up to *batch_size* per call.
 
     Args:
-        image_paths: Ordered list of PNG file paths (page 1 first).
-        batch_size:  Images per request. Defaults to ``settings.ocr_batch_size`` (5).
-        max_retries: Retry attempts per batch. Defaults to ``settings.ocr_max_retries``.
-        base_delay:  Back-off base delay. Defaults to ``settings.ocr_retry_base_delay``.
+        page_images: List of raw PNG byte-strings, one per page (page 1 first).
+        batch_size:  Pages per API request. Defaults to ``settings.ocr_batch_size``.
+        max_retries: Retry attempts per batch.
+        base_delay:  Exponential back-off base (seconds).
 
     Returns:
         Flat list of PageOCRResult ordered by page number.
     """
     settings = get_settings()
-    batch_size = batch_size or settings.ocr_batch_size
+    batch_size  = batch_size  or settings.ocr_batch_size
     max_retries = max_retries or settings.ocr_max_retries
-    base_delay = base_delay or settings.ocr_retry_base_delay
+    base_delay  = base_delay  or settings.ocr_retry_base_delay
 
-    if not image_paths:
+    if not page_images:
         return []
 
+    total = len(page_images)
     all_results: list[PageOCRResult] = []
-    total = len(image_paths)
+    n_batches = -(-total // batch_size)  # ceiling div
 
     for batch_idx, start in enumerate(range(0, total, batch_size)):
-        batch = image_paths[start : start + batch_size]
-        batch_start_page = start + 1  # 1-based
+        batch = page_images[start : start + batch_size]
+        batch_start_page = start + 1
         logger.info(
             "OCR batch %d/%d — pages %d-%d",
-            batch_idx + 1,
-            -(-total // batch_size),  # ceiling division
-            batch_start_page,
-            batch_start_page + len(batch) - 1,
+            batch_idx + 1, n_batches,
+            batch_start_page, batch_start_page + len(batch) - 1,
         )
         results = await _ocr_batch_with_retry(batch, batch_start_page, max_retries, base_delay)
         all_results.extend(results)
 
-    # Sort by page number (should already be sorted, but be safe)
+        # Release batch bytes from memory immediately
+        del batch
+
     all_results.sort(key=lambda r: r.page)
     return all_results

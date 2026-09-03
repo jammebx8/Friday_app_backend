@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     chunk_overlap_tokens: int = Field(default=80, description="Overlap between chunks")
 
     # ── PDF processing ────────────────────────────────────────────────────────
-    pdf_dpi: int = Field(default=200, description="DPI for page-to-image rendering")
+    pdf_dpi: int = Field(default=150, description="DPI for page-to-image rendering (150 sufficient for OCR, saves memory)")
     ocr_batch_size: int = Field(default=5, description="Pages per OCR request")
     ocr_max_retries: int = Field(default=3, description="OCR retry attempts")
     ocr_retry_base_delay: float = Field(
