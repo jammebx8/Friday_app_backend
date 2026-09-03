@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 from app.core.config import get_settings
 from app.models.chunk import RetrievedChunk
-from app.services.embeddings import embed_query
+from app.services.embedding_client import embed_query
 from app.services.groq import chat_completion
 from app.services.vector_store import similarity_search
 

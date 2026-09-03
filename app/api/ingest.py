@@ -20,7 +20,7 @@ from uuid import UUID
 from app.db.supabase import db_update
 from app.models.chunk import ChunkInsertPayload
 from app.services.chunking import chunk_pages
-from app.services.embeddings import embed_documents
+from app.services.embedding_client import embed_documents
 from app.services.ocr import ocr_pages
 from app.services.pdf import cleanup_images, pdf_to_images
 from app.services.vector_store import insert_chunks

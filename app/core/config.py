@@ -69,13 +69,29 @@ class Settings(BaseSettings):
         description="Allowed CORS origins (restrict in production)",
     )
 
+    # ── External embedding service ────────────────────────────────────────────
+    embedding_service_url: str = Field(
+        ...,
+        description=(
+            "Base URL of the external embedding service, e.g. "
+            "https://my-embed-worker.modal.run"
+        ),
+    )
+    embedding_service_api_key: str = Field(
+        default="",
+        description=(
+            "Optional bearer token sent as 'Authorization: Bearer <key>'. "
+            "Leave empty if the service requires no authentication."
+        ),
+    )
+
     # ── Storage ───────────────────────────────────────────────────────────────
     tmp_dir: str = Field(
         default="/tmp/friday_rag",
         description="Temporary directory for PDF images",
     )
 
-    @field_validator("groq_api_key", "supabase_url", "supabase_key", mode="before")
+    @field_validator("groq_api_key", "supabase_url", "supabase_key", "embedding_service_url", mode="before")
     @classmethod
     def _must_not_be_empty(cls, v: str) -> str:
         if not v or not v.strip():

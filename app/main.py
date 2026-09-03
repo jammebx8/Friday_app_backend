@@ -24,7 +24,7 @@ from app.api.books import router as books_router
 from app.api.chat import router as chat_router
 from app.core.config import get_settings
 from app.db.supabase import close_supabase, init_supabase
-from app.services.embeddings import warm_up_embeddings
+from app.services.embedding_client import close_embedding_client
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -47,16 +47,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialise Supabase async client
     await init_supabase()
 
-    # Pre-load BGE model so first request has no cold-start lag
-    logger.info("Pre-loading BGE embedding model: %s", settings.embed_model)
-    warm_up_embeddings()
-    logger.info("Embedding model warm-up complete")
+    # Embedding model runs in an external service — no local warm-up needed.
+    logger.info(
+        "Embedding service configured at: %s",
+        settings.embedding_service_url,
+    )
 
     logger.info("=== Friday RAG ready — listening on %s:%d ===", settings.host, settings.port)
     yield  # Application runs here
 
     # Shutdown
     logger.info("=== Friday RAG shutting down ===")
+    await close_embedding_client()
     await close_supabase()
 
 

@@ -8,16 +8,15 @@ pydantic==2.10.3
 pydantic-settings==2.6.1
 
 # ── AI / ML ───────────────────────────────────────────────────────────────────
+# torch, torchvision, sentence-transformers, and langchain-huggingface are
+# intentionally excluded — embeddings are delegated to an external service.
 groq==0.13.1
-sentence-transformers==3.3.1
-torch==2.5.1                # CPU-only build — remove +cpu for GPU
-torchvision==0.20.1
 
-# ── LangChain semantic chunker ────────────────────────────────────────────────
+# ── LangChain (text splitting only — no HuggingFace / torch dependency) ──────
+# SemanticChunker is replaced by RecursiveCharacterTextSplitter so we no
+# longer need langchain-experimental or langchain-huggingface.
 langchain==0.3.13
 langchain-community==0.3.13
-langchain-experimental==0.3.4
-langchain-huggingface==0.1.2
 
 # ── PDF rendering ─────────────────────────────────────────────────────────────
 PyMuPDF==1.25.1
