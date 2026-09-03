@@ -36,8 +36,8 @@ class Settings(BaseSettings):
         description="Generation model served via Groq",
     )
     vision_model: str = Field(
-        default="qwen/qwen3-72b",
-        description="Vision / OCR model served via Groq",
+        default="meta-llama/llama-4-scout-17b-16e-instruct",
+        description="Vision / OCR model served via Groq (multimodal, supports images)",
     )
     embed_model: str = Field(
         default="BAAI/bge-small-en-v1.5",
@@ -51,11 +51,18 @@ class Settings(BaseSettings):
 
     # ── PDF processing ────────────────────────────────────────────────────────
     pdf_dpi: int = Field(default=150, description="DPI for page-to-image rendering (150 sufficient for OCR, saves memory)")
-    ocr_batch_size: int = Field(default=5, description="Pages per OCR request")
-    ocr_max_retries: int = Field(default=3, description="OCR retry attempts")
+    ocr_batch_size: int = Field(default=1, description="Pages per OCR request (1 = safest under 8K token/min limit)")
+    ocr_max_retries: int = Field(default=5, description="OCR retry attempts (more retries for rate-limit resilience)")
     ocr_retry_base_delay: float = Field(
-        default=1.5, description="Base delay (seconds) for exponential back-off"
+        default=2.0, description="Base delay (seconds) for exponential back-off"
     )
+
+    # ── Groq vision rate limits ───────────────────────────────────────────────
+    # Limits for meta-llama/llama-4-scout-17b-16e-instruct (free tier):
+    #   30 req/min | 8K tokens/min | 1K req/day
+    # The OCR loop enforces these to avoid 429 errors on large books.
+    ocr_rpm_limit: int = Field(default=20, description="Max OCR requests per minute (headroom below 30 RPM limit)")
+    ocr_min_gap_seconds: float = Field(default=3.0, description="Minimum seconds between OCR batch requests")
 
     # ── Server ────────────────────────────────────────────────────────────────
     host: str = Field(default="0.0.0.0")

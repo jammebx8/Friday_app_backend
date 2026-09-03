@@ -108,9 +108,16 @@ async def run_ingestion(
         )
 
         # ── Stage 3: OCR ───────────────────────────────────────────────────
-        logger.info("[ingest %s] Stage 3: OCR (%d pages)", bid, total_pages)
+        logger.info("[ingest %s] Stage 3: OCR (%d pages, ~%.0fs estimated)",
+                    bid, total_pages, total_pages * 3.5)
 
-        ocr_results = await ocr_pages(page_images)
+        # Progress callback: update DB after every OCR'd page so the frontend
+        # shows live progress during the slow OCR stage (10% → 60%).
+        async def ocr_progress(pages_done: int, total: int) -> None:
+            pct = 10 + int((pages_done / total) * 50)   # maps 0..total → 10..60
+            await _set_progress(bid, pct, pages_done=pages_done)
+
+        ocr_results = await ocr_pages(page_images, progress_callback=ocr_progress)
 
         # Free all page images from memory now that OCR is done
         del page_images
